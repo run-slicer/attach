@@ -30,14 +30,14 @@ jobs:
 
       - name: Start JShell in background
         run: |
-          jshell > /dev/null 2>&1 &
+          jshell &
           sleep 5
         if: runner.os == 'Linux'
 
-      - name: Start JShell in background
+      - name: Start JShell in background (PowerShell)
         run: |
-          start /b jshell > nul 2>&1
-          timeout /t 5 > nul
+          Start-Process -NoNewWindow jshell
+          Start-Sleep -Seconds 5
         if: runner.os == 'Windows'
 
       - name: Run Go tests
