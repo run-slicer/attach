@@ -28,17 +28,16 @@ jobs:
         with:
           go-version: "1.24.x"
 
-      - name: Start JVM in background
+      - name: Start JVM and test
         run: |
           java ./test/BusyWait.java &
-          sleep 10
+          sleep 5
+          go test -v ./...
         if: runner.os == 'Linux'
 
-      - name: Start JVM in background (PowerShell)
+      - name: Start JVM and test (PowerShell)
         run: |
           Start-Process -NoNewWindow java ./test/BusyWait.java
-          Start-Sleep -Seconds 10
+          Start-Sleep -Seconds 5
+          go test -v ./...
         if: runner.os == 'Windows'
-
-      - name: Run Go tests
-        run: go test -v ./...
