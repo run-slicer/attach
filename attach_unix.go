@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,10 +23,23 @@ func init() {
 type UnixProvider struct {
 }
 
+func (up *UnixProvider) tmpDir() string {
+	// macOS has a specific per-user temporary directory
+	// https://github.com/openjdk/jdk/blob/master/src/jdk.attach/macosx/native/libattach/VirtualMachineImpl.c#L344
+	if runtime.GOOS == "darwin" {
+		if dir := os.Getenv("TMPDIR"); dir != "" {
+			return dir
+		}
+	}
+
+	return os.TempDir()
+}
+
 // listPids returns a list of process IDs found in the hsperfdata directories.
 // The PIDs may or may not exist or may not be from Java processes.
 func (up *UnixProvider) listPids() ([]int, error) {
-	entries, err := os.ReadDir(os.TempDir())
+	tmp := up.tmpDir()
+	entries, err := os.ReadDir(tmp)
 	if err != nil {
 		return nil, err
 	}
@@ -36,7 +50,7 @@ func (up *UnixProvider) listPids() ([]int, error) {
 			continue
 		}
 
-		subEntries, err := os.ReadDir(filepath.Join(os.TempDir(), entry.Name()))
+		subEntries, err := os.ReadDir(filepath.Join(tmp, entry.Name()))
 		if err != nil {
 			continue
 		}
