@@ -32,12 +32,12 @@ jobs:
         run: |
           java ./test/BusyWait.java &
           sleep 5
-          go test -v -count=1 ./...
+          go test -v -count=1 -parallel=1 ./...
         if: runner.os == 'Linux'
 
       - name: Start JVM and test (PowerShell)
         run: |
           Start-Process -NoNewWindow java ./test/BusyWait.java
           Start-Sleep -Seconds 5
-          go test -v -count=1 ./...
+          go test -v -count=1 -parallel=1 ./...
         if: runner.os == 'Windows'

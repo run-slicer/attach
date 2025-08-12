@@ -62,7 +62,7 @@ func (up *UnixProvider) List() ([]*VMDescriptor, error) {
 		if data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid)); err == nil {
 			descs = append(descs, &VMDescriptor{
 				ID:          strconv.Itoa(pid),
-				DisplayName: string(data),
+				DisplayName: strings.ReplaceAll(string(data), "\u0000", " "),
 				Provider:    up,
 			})
 		}

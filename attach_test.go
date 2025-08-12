@@ -106,3 +106,35 @@ func TestVM_ThreadDump(t *testing.T) {
 
 	t.Logf("Thread dump:\n%s", threadDump)
 }
+
+func TestVM_Load(t *testing.T) {
+	provider, err := Default()
+	if err != nil {
+		t.Fatalf("failed to get default provider: %v", err)
+	}
+
+	descs, err := provider.List()
+	if err != nil {
+		t.Fatalf("failed to list VM descriptors: %v", err)
+	}
+
+	if len(descs) == 0 {
+		t.Skip("no VM descriptors found, skipping load test")
+	}
+
+	vm, err := provider.Attach(descs[0])
+	if err != nil {
+		t.Fatalf("failed to attach to VM: %v", err)
+	}
+
+	defer func() {
+		_ = vm.Close()
+	}()
+
+	err = vm.Load("./test/jolokia-agent-jvm-javaagent.jar", "")
+	if err != nil {
+		t.Fatalf("failed to load agent: %v", err)
+	}
+
+	t.Logf("Agent loaded successfully")
+}
