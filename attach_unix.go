@@ -69,7 +69,7 @@ func (up *UnixProvider) connect(pid int) (*net.UnixConn, error) {
 	sockFile := fmt.Sprintf("/proc/%d/root/tmp/.java_pid%d", pid, pid)
 	if _, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid)); errors.Is(err, os.ErrNotExist) {
 		// presume procfs is not available, fallback to normal temp directory
-		sockFile = filepath.Join(os.TempDir(), fmt.Sprintf(".java_pid%d", pid))
+		sockFile = filepath.Join("/tmp", fmt.Sprintf(".java_pid%d", pid))
 	}
 
 	for i := 0; i < 10; i++ {
@@ -82,5 +82,5 @@ func (up *UnixProvider) connect(pid int) (*net.UnixConn, error) {
 
 		return conn, nil
 	}
-	return nil, fmt.Errorf("error attaching to process %d: %v", pid, err)
+	return nil, err
 }

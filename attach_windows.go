@@ -11,10 +11,7 @@ func init() {
 }
 
 type WindowsProvider struct {
-}
-
-func (wp *WindowsProvider) List() ([]*VMDescriptor, error) {
-	return nil, errors.ErrUnsupported
+	stdProvider
 }
 
 func (wp *WindowsProvider) Attach(desc *VMDescriptor) (VM, error) {
