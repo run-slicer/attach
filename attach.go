@@ -4,10 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
+	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/shirou/gopsutil/v4/process"
 )
 
 // ErrNoProvider is an error returned when no provider is available, typically when the platform is not supported.
@@ -30,8 +35,6 @@ type VMDescriptor struct {
 	ID string
 	// DisplayName is a human-readable name for the JVM instance, may be empty, usually the process command line.
 	DisplayName string
-	// Provider is the provider that created this descriptor.
-	Provider Provider
 }
 
 // VM represents an attached JVM instance.
@@ -59,6 +62,63 @@ type Provider interface {
 	AttachID(id string) (VM, error)
 }
 
+type stdProvider struct {
+}
+
+// listPids returns a list of process IDs found in the hsperfdata directories.
+// The PIDs may or may not exist or may not be from Java processes.
+func (sp stdProvider) listPids() ([]int, error) {
+	entries, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		return nil, err
+	}
+
+	pids := map[int]struct{}{}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "hsperfdata_") || !entry.IsDir() {
+			continue
+		}
+
+		subEntries, err := os.ReadDir(filepath.Join(os.TempDir(), entry.Name()))
+		if err != nil {
+			continue
+		}
+
+		for _, subEntry := range subEntries {
+			if pid, err := strconv.Atoi(subEntry.Name()); err == nil {
+				pids[pid] = struct{}{}
+			}
+		}
+	}
+
+	return slices.Collect(maps.Keys(pids)), nil
+}
+
+func (sp stdProvider) List() ([]*VMDescriptor, error) {
+	pids, err := sp.listPids()
+	if err != nil {
+		return nil, fmt.Errorf("error listing PIDs: %v", err)
+	}
+
+	var descs []*VMDescriptor
+	for _, pid := range pids {
+		proc, err := process.NewProcess(int32(pid))
+		if err != nil {
+			// exited?
+			continue
+		}
+
+		desc := &VMDescriptor{ID: strconv.Itoa(pid)}
+		descs = append(descs, desc)
+
+		if cmdline, err := proc.Cmdline(); err == nil {
+			desc.DisplayName = cmdline
+		}
+	}
+
+	return descs, nil
+}
+
 type stdVM struct {
 	conn net.Conn
 }
@@ -84,7 +144,7 @@ func (el *ErrLoad) Error() string {
 }
 
 type ErrAgentLoad struct {
-	ErrLoad
+	*ErrLoad
 }
 
 func (eal *ErrAgentLoad) Error() string {
@@ -105,7 +165,7 @@ func (eal *ErrAgentLoad) Error() string {
 }
 
 func (eal *ErrAgentLoad) Unwrap() error {
-	return &eal.ErrLoad
+	return eal.ErrLoad
 }
 
 func (vm *stdVM) Load(agent string, options string) error {
@@ -121,8 +181,9 @@ func (vm *stdVM) Load(agent string, options string) error {
 
 	err = vm.LoadLibrary("instrument", false, args)
 	if err != nil {
-		if el, ok := err.(*ErrLoad); ok {
-			return &ErrAgentLoad{ErrLoad: *el}
+		var el *ErrLoad
+		if errors.As(err, &el) {
+			return &ErrAgentLoad{el}
 		}
 		return err
 	}

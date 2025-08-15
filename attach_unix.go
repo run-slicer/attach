@@ -3,16 +3,16 @@
 package attach
 
 import (
+	"errors"
 	"fmt"
-	"maps"
 	"net"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
+
+	"github.com/shirou/gopsutil/v4/process"
 )
 
 func init() {
@@ -20,55 +20,7 @@ func init() {
 }
 
 type UnixProvider struct {
-}
-
-// listPids returns a list of process IDs found in the hsperfdata directories.
-// The PIDs may or may not exist or may not be from Java processes.
-func (up *UnixProvider) listPids() ([]int, error) {
-	entries, err := os.ReadDir(os.TempDir())
-	if err != nil {
-		return nil, err
-	}
-
-	pids := map[int]struct{}{}
-	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), "hsperfdata_") || !entry.IsDir() {
-			continue
-		}
-
-		subEntries, err := os.ReadDir(filepath.Join(os.TempDir(), entry.Name()))
-		if err != nil {
-			continue
-		}
-
-		for _, subEntry := range subEntries {
-			if pid, err := strconv.Atoi(subEntry.Name()); err == nil {
-				pids[pid] = struct{}{}
-			}
-		}
-	}
-
-	return slices.Collect(maps.Keys(pids)), nil
-}
-
-func (up *UnixProvider) List() ([]*VMDescriptor, error) {
-	pids, err := up.listPids()
-	if err != nil {
-		return nil, fmt.Errorf("error listing PIDs: %v", err)
-	}
-
-	var descs []*VMDescriptor
-	for _, pid := range pids {
-		if data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid)); err == nil {
-			descs = append(descs, &VMDescriptor{
-				ID:          strconv.Itoa(pid),
-				DisplayName: strings.ReplaceAll(string(data), "\u0000", " "),
-				Provider:    up,
-			})
-		}
-	}
-
-	return descs, nil
+	stdProvider
 }
 
 func (up *UnixProvider) Attach(desc *VMDescriptor) (VM, error) {
@@ -90,11 +42,17 @@ func (up *UnixProvider) AttachID(id string) (VM, error) {
 }
 
 func (up *UnixProvider) connect(pid int) (*net.UnixConn, error) {
-	if _, err := os.Stat(fmt.Sprintf("/proc/%d/status", pid)); err != nil {
-		return nil, fmt.Errorf("error stating process status %d: %v", pid, err)
+	proc, err := process.NewProcess(int32(pid))
+	if err != nil {
+		return nil, fmt.Errorf("error getting process %d: %v", pid, err)
 	}
 
-	attachFile := fmt.Sprintf("/proc/%d/cwd/.attach_pid%d", pid, pid)
+	cwd, err := proc.Cwd()
+	if err != nil {
+		return nil, fmt.Errorf("error getting current working directory for process %d: %v", pid, err)
+	}
+
+	attachFile := filepath.Join(cwd, fmt.Sprintf(".attach_pid%d", pid))
 	if err := os.WriteFile(attachFile, nil, 0660); err != nil {
 		return nil, fmt.Errorf("error creating file %s: %w", attachFile, err)
 	}
@@ -103,12 +61,17 @@ func (up *UnixProvider) connect(pid int) (*net.UnixConn, error) {
 		_ = os.Remove(attachFile)
 	}()
 
-	err := syscall.Kill(pid, syscall.SIGQUIT)
+	err = syscall.Kill(pid, syscall.SIGQUIT)
 	if err != nil {
 		return nil, fmt.Errorf("error sending SIGQUIT to %v: %v", pid, err)
 	}
 
 	sockFile := fmt.Sprintf("/proc/%d/root/tmp/.java_pid%d", pid, pid)
+	if _, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid)); errors.Is(err, os.ErrNotExist) {
+		// presume procfs is not available, fallback to normal temp directory
+		sockFile = filepath.Join(os.TempDir(), fmt.Sprintf(".java_pid%d", pid))
+	}
+
 	for i := 0; i < 10; i++ {
 		var conn *net.UnixConn
 		conn, err = net.DialUnix("unix", nil, &net.UnixAddr{Name: sockFile, Net: "unix"})
