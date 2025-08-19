@@ -2,20 +2,21 @@
 
 A Go library for attaching to running JVMs via the Attach API.
 
-Currently, HotSpot-based JVMs are supported on Unix-like systems (Linux, macOS). Windows support is partially implemented but requires complex process injection which is not yet available in pure Go.
+HotSpot-based JVMs are supported on Unix-like systems (Linux, macOS) and Windows.
 
 ## Platform Support
 
 - ✅ **Linux**: Full support via Unix domain sockets
 - ✅ **macOS**: Full support via Unix domain sockets  
-- ⚠️ **Windows**: Partial implementation - Windows JVM attach requires process injection with assembly code generation, which is complex to implement in pure Go. For reference implementations, see OpenJDK's `VirtualMachineImpl.c` and the jattach project.
+- ✅ **Windows**: Full support via named pipes and process injection (requires CGO)
 
 ## Windows Implementation Notes
 
-Windows JVM attach requires:
-1. Creating named pipes for communication
-2. Injecting assembly code into the target JVM process
-3. Calling `JVM_EnqueueOperation` from within the target process
-4. Complex memory management and security handling
+The Windows implementation uses process injection to call `JVM_EnqueueOperation` in the target JVM process, similar to how OpenJDK and other JVM attach tools work. This requires:
 
-This is significantly more complex than the Unix implementation which uses simple domain sockets and signals.
+1. Creating named pipes for communication
+2. Injecting executable code into the target JVM process
+3. Calling `JVM_EnqueueOperation` from within the target process
+4. Handling security and privilege requirements
+
+The implementation is based on reference code from OpenJDK and the byte-buddy project.

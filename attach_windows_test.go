@@ -35,19 +35,40 @@ func TestWindowsProvider_AttachID_Invalid(t *testing.T) {
 	t.Logf("Expected error for invalid PID: %v", err)
 }
 
-func TestWindowsProvider_AttachID_ProcessInjectionNotImplemented(t *testing.T) {
+func TestWindowsProvider_AttachID_ProcessNotFound(t *testing.T) {
 	provider := &WindowsProvider{}
 	
-	// Test that attach correctly returns error about process injection
-	_, err := provider.AttachID("1234")
+	// Test with a PID that doesn't exist
+	_, err := provider.AttachID("99999")
 	if err == nil {
-		t.Fatal("Expected error indicating process injection not implemented")
+		t.Fatal("Expected error for non-existent PID")
 	}
 	
-	// Verify the error mentions the complexity of Windows attach
-	if !strings.Contains(err.Error(), "process injection") {
-		t.Fatalf("Expected error to mention process injection, got: %v", err)
+	// Should get an error about not being able to attach to the process
+	t.Logf("Expected error for non-existent PID: %v", err)
+}
+
+func TestWindowsProvider_GeneratePipeName(t *testing.T) {
+	provider := &WindowsProvider{}
+	
+	// Test pipe name generation
+	name1, err := provider.generatePipeName()
+	if err != nil {
+		t.Fatalf("generatePipeName failed: %v", err)
 	}
 	
-	t.Logf("Expected error about Windows complexity: %v", err)
+	name2, err := provider.generatePipeName()
+	if err != nil {
+		t.Fatalf("generatePipeName failed: %v", err)
+	}
+	
+	if name1 == name2 {
+		t.Fatal("generatePipeName should generate unique names")
+	}
+	
+	if !strings.HasPrefix(name1, "javatool") {
+		t.Fatalf("Pipe name should start with 'javatool', got: %s", name1)
+	}
+	
+	t.Logf("Generated pipe names: %s, %s", name1, name2)
 }

@@ -2,8 +2,13 @@
 
 package attach
 
+/*
+#include "attach_windows.c"
+*/
+import "C"
+
 import (
-	"errors"
+	"crypto/rand"
 	"fmt"
 	"net"
 	"os"
@@ -47,6 +52,12 @@ func (wp *WindowsProvider) attachFilePath(pid int) (string, error) {
 }
 
 func (wp *WindowsProvider) connect(pid int) (net.Conn, error) {
+	// Generate a unique pipe name
+	pipeName, err := wp.generatePipeName()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate pipe name: %w", err)
+	}
+
 	// Create attach file to signal the JVM (this part is correct)
 	attachPath, err := wp.attachFilePath(pid)
 	if err != nil {
@@ -61,67 +72,60 @@ func (wp *WindowsProvider) connect(pid int) (net.Conn, error) {
 		_ = os.Remove(attachPath)
 	}()
 
-	// The real Windows attach protocol requires:
-	// 1. Creating a named pipe with unique name (\\.\pipe\javatool{random})
-	// 2. Injecting a thread into the target JVM process 
-	// 3. The injected thread calls JVM_EnqueueOperation with the pipe name
-	// 4. The JVM connects back to our pipe for communication
-	//
-	// This requires complex assembly code generation and process injection
-	// which is beyond the scope of this Go implementation.
-	//
-	// For reference, see:
-	// - OpenJDK: src/jdk.attach/windows/native/libattach/VirtualMachineImpl.c
-	// - jattach: src/windows/jattach.c
-	//
-	// A proper implementation would need to:
-	// - Generate position-independent assembly code
-	// - Handle different CPU architectures (x86/x64)  
-	// - Manage complex memory allocation in target process
-	// - Handle security and privilege escalation
+	// Create the named pipe
+	pipeNameC := C.CString(pipeName)
+	defer C.free(unsafe.Pointer(pipeNameC))
 
-	return nil, fmt.Errorf("Windows JVM attach requires process injection with assembly code generation - not implemented in pure Go")
+	hPipe := C.create_attach_pipe(pipeNameC)
+	if hPipe == C.HANDLE(windows.InvalidHandle) {
+		return nil, fmt.Errorf("failed to create named pipe: %v", windows.GetLastError())
+	}
+
+	// Inject into the target process to make it connect to our pipe
+	pidC := C.DWORD(pid)
+	arg0C := C.CString("JCMD")
+	arg1C := C.CString("")
+	arg2C := C.CString("")
+	arg3C := C.CString("")
+	defer C.free(unsafe.Pointer(arg0C))
+	defer C.free(unsafe.Pointer(arg1C))
+	defer C.free(unsafe.Pointer(arg2C))
+	defer C.free(unsafe.Pointer(arg3C))
+
+	result := C.attach_to_jvm(pidC, pipeNameC, arg0C, arg1C, arg2C, arg3C)
+	if result != 0 {
+		C.CloseHandle(hPipe)
+		return nil, fmt.Errorf("failed to inject into target process: error code %d", result)
+	}
+
+	// Wait for the JVM to connect to our pipe
+	err = wp.waitForConnection(windows.Handle(hPipe))
+	if err != nil {
+		C.CloseHandle(hPipe)
+		return nil, fmt.Errorf("failed to wait for JVM connection: %w", err)
+	}
+
+	return &windowsPipeConn{handle: windows.Handle(hPipe)}, nil
 }
 
-// Placeholder implementations for potential future use
-func (wp *WindowsProvider) createNamedPipe(pipeName string) (windows.Handle, error) {
-	// Security descriptor to allow access from different integrity levels
-	secDesc := "D:(A;;GRGW;;;WD)"
-	var sa windows.SecurityAttributes
-	sa.Length = uint32(unsafe.Sizeof(sa))
-	sa.InheritHandle = false
-
-	err := windows.ConvertStringSecurityDescriptorToSecurityDescriptor(
-		windows.StringToUTF16Ptr(secDesc),
-		windows.SDDL_REVISION_1,
-		&sa.SecurityDescriptor,
-		nil,
-	)
+func (wp *WindowsProvider) generatePipeName() (string, error) {
+	// Generate a random pipe name similar to how OpenJDK does it
+	buf := make([]byte, 8)
+	_, err := rand.Read(buf)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
-	defer windows.LocalFree(windows.Handle(unsafe.Pointer(sa.SecurityDescriptor)))
+	
+	return fmt.Sprintf("javatool%x", buf), nil
+}
 
-	pipeNameUTF16, err := windows.UTF16PtrFromString(pipeName)
-	if err != nil {
-		return 0, err
+func (wp *WindowsProvider) waitForConnection(hPipe windows.Handle) error {
+	// Wait for client to connect to the pipe
+	err := windows.ConnectNamedPipe(hPipe, nil)
+	if err != nil && err != windows.ERROR_PIPE_CONNECTED {
+		return fmt.Errorf("ConnectNamedPipe failed: %w", err)
 	}
-
-	hPipe, err := windows.CreateNamedPipe(
-		pipeNameUTF16,
-		windows.PIPE_ACCESS_DUPLEX|windows.FILE_FLAG_FIRST_PIPE_INSTANCE,
-		windows.PIPE_TYPE_BYTE|windows.PIPE_READMODE_BYTE|windows.PIPE_WAIT|windows.PIPE_REJECT_REMOTE_CLIENTS,
-		1,      // max instances
-		4096,   // output buffer size
-		8192,   // input buffer size
-		0,      // default timeout
-		&sa,    // security attributes
-	)
-	if err != nil {
-		return 0, err
-	}
-
-	return hPipe, nil
+	return nil
 }
 
 // windowsPipeConn implements net.Conn for Windows named pipes
