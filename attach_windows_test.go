@@ -3,6 +3,7 @@
 package attach
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -32,4 +33,21 @@ func TestWindowsProvider_AttachID_Invalid(t *testing.T) {
 	}
 	
 	t.Logf("Expected error for invalid PID: %v", err)
+}
+
+func TestWindowsProvider_AttachID_ProcessInjectionNotImplemented(t *testing.T) {
+	provider := &WindowsProvider{}
+	
+	// Test that attach correctly returns error about process injection
+	_, err := provider.AttachID("1234")
+	if err == nil {
+		t.Fatal("Expected error indicating process injection not implemented")
+	}
+	
+	// Verify the error mentions the complexity of Windows attach
+	if !strings.Contains(err.Error(), "process injection") {
+		t.Fatalf("Expected error to mention process injection, got: %v", err)
+	}
+	
+	t.Logf("Expected error about Windows complexity: %v", err)
 }

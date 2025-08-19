@@ -3,12 +3,14 @@
 package attach
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -45,6 +47,7 @@ func (wp *WindowsProvider) attachFilePath(pid int) (string, error) {
 }
 
 func (wp *WindowsProvider) connect(pid int) (net.Conn, error) {
+	// Create attach file to signal the JVM (this part is correct)
 	attachPath, err := wp.attachFilePath(pid)
 	if err != nil {
 		return nil, err
@@ -58,65 +61,67 @@ func (wp *WindowsProvider) connect(pid int) (net.Conn, error) {
 		_ = os.Remove(attachPath)
 	}()
 
-	// Signal the JVM process using Windows event mechanism
-	err = wp.signalProcess(pid)
-	if err != nil {
-		return nil, fmt.Errorf("error signaling process %v: %v", pid, err)
-	}
+	// The real Windows attach protocol requires:
+	// 1. Creating a named pipe with unique name (\\.\pipe\javatool{random})
+	// 2. Injecting a thread into the target JVM process 
+	// 3. The injected thread calls JVM_EnqueueOperation with the pipe name
+	// 4. The JVM connects back to our pipe for communication
+	//
+	// This requires complex assembly code generation and process injection
+	// which is beyond the scope of this Go implementation.
+	//
+	// For reference, see:
+	// - OpenJDK: src/jdk.attach/windows/native/libattach/VirtualMachineImpl.c
+	// - jattach: src/windows/jattach.c
+	//
+	// A proper implementation would need to:
+	// - Generate position-independent assembly code
+	// - Handle different CPU architectures (x86/x64)  
+	// - Manage complex memory allocation in target process
+	// - Handle security and privilege escalation
 
-	// Create named pipe path
-	pipeName := fmt.Sprintf(`\\.\pipe\.java_pid%d`, pid)
-
-	// Try to connect to the named pipe with retries
-	for i := 0; i < 10; i++ {
-		conn, err := wp.connectToPipe(pipeName)
-		if err != nil {
-			time.Sleep(time.Duration(1<<uint(i)) * time.Millisecond)
-			continue
-		}
-		return conn, nil
-	}
-	return nil, err
+	return nil, fmt.Errorf("Windows JVM attach requires process injection with assembly code generation - not implemented in pure Go")
 }
 
-func (wp *WindowsProvider) signalProcess(pid int) error {
-	// Open the process with minimal required access
-	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_INFORMATION, false, uint32(pid))
-	if err != nil {
-		return fmt.Errorf("error opening process %d: %v", pid, err)
-	}
-	defer windows.CloseHandle(handle)
+// Placeholder implementations for potential future use
+func (wp *WindowsProvider) createNamedPipe(pipeName string) (windows.Handle, error) {
+	// Security descriptor to allow access from different integrity levels
+	secDesc := "D:(A;;GRGW;;;WD)"
+	var sa windows.SecurityAttributes
+	sa.Length = uint32(unsafe.Sizeof(sa))
+	sa.InheritHandle = false
 
-	// For Windows, we need to trigger the attach listener in the JVM
-	// The JVM on Windows listens for attach requests by checking for attach files
-	// and doesn't require a signal like Unix systems
-	// The attach file creation is sufficient to trigger the attach mechanism
-	return nil
-}
-
-func (wp *WindowsProvider) connectToPipe(pipeName string) (net.Conn, error) {
-	// Convert Go string to UTF16 for Windows API
-	pipeNameUTF16, err := windows.UTF16PtrFromString(pipeName)
-	if err != nil {
-		return nil, err
-	}
-
-	// Try to open the named pipe
-	handle, err := windows.CreateFile(
-		pipeNameUTF16,
-		windows.GENERIC_READ|windows.GENERIC_WRITE,
-		0,
+	err := windows.ConvertStringSecurityDescriptorToSecurityDescriptor(
+		windows.StringToUTF16Ptr(secDesc),
+		windows.SDDL_REVISION_1,
+		&sa.SecurityDescriptor,
 		nil,
-		windows.OPEN_EXISTING,
-		0,
-		0,
 	)
 	if err != nil {
-		return nil, err
+		return 0, err
+	}
+	defer windows.LocalFree(windows.Handle(unsafe.Pointer(sa.SecurityDescriptor)))
+
+	pipeNameUTF16, err := windows.UTF16PtrFromString(pipeName)
+	if err != nil {
+		return 0, err
 	}
 
-	// Wrap the Windows handle in a Go net.Conn interface
-	return &windowsPipeConn{handle: handle}, nil
+	hPipe, err := windows.CreateNamedPipe(
+		pipeNameUTF16,
+		windows.PIPE_ACCESS_DUPLEX|windows.FILE_FLAG_FIRST_PIPE_INSTANCE,
+		windows.PIPE_TYPE_BYTE|windows.PIPE_READMODE_BYTE|windows.PIPE_WAIT|windows.PIPE_REJECT_REMOTE_CLIENTS,
+		1,      // max instances
+		4096,   // output buffer size
+		8192,   // input buffer size
+		0,      // default timeout
+		&sa,    // security attributes
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	return hPipe, nil
 }
 
 // windowsPipeConn implements net.Conn for Windows named pipes
@@ -127,6 +132,9 @@ type windowsPipeConn struct {
 func (c *windowsPipeConn) Read(b []byte) (n int, err error) {
 	var bytesRead uint32
 	err = windows.ReadFile(c.handle, b, &bytesRead, nil)
+	if err == windows.ERROR_BROKEN_PIPE {
+		return int(bytesRead), fmt.Errorf("pipe broken")
+	}
 	return int(bytesRead), err
 }
 
