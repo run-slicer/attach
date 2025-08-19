@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"syscall"
 	"time"
@@ -41,27 +42,34 @@ func (up *UnixProvider) AttachID(id string) (VM, error) {
 	return &stdVM{conn}, nil
 }
 
-func (up *UnixProvider) connect(pid int) (*net.UnixConn, error) {
+func (up *UnixProvider) attachFilePath(pid int) (string, error) {
+	file := fmt.Sprintf(".attach_pid%d", pid)
+	if runtime.GOOS == "darwin" {
+		// https://github.com/openjdk/jdk/blob/master/src/jdk.attach/macosx/classes/sun/tools/attach/VirtualMachineImpl.java#L214
+		return filepath.Join(os.TempDir(), file), nil
+	}
+
 	proc, err := process.NewProcess(int32(pid))
 	if err != nil {
-		return nil, fmt.Errorf("error getting process %d: %v", pid, err)
+		return "", fmt.Errorf("error getting process %d: %v", pid, err)
 	}
 
 	cwd, err := proc.Cwd()
 	if err != nil {
-		return nil, fmt.Errorf("error getting current working directory for process %d: %v", pid, err)
+		return "", fmt.Errorf("error getting current working directory for process %d: %v", pid, err)
 	}
 
-	var (
-		attachFile = fmt.Sprintf(".attach_pid%d", pid)
-		attachPath = filepath.Join(cwd, attachFile)
-	)
+	return filepath.Join(cwd, file), nil
+}
+
+func (up *UnixProvider) connect(pid int) (*net.UnixConn, error) {
+	attachPath, err := up.attachFilePath(pid)
+	if err != nil {
+		return nil, err
+	}
+
 	if err := os.WriteFile(attachPath, nil, 0660); err != nil {
-		// no permissions/read-only fs? try the temporary directory
-		attachPath = filepath.Join(os.TempDir(), attachFile)
-		if err := os.WriteFile(attachPath, nil, 0660); err != nil {
-			return nil, fmt.Errorf("error creating attach file %s: %w", attachFile, err)
-		}
+		return nil, fmt.Errorf("error creating attach file %s: %w", attachPath, err)
 	}
 
 	defer func() {
