@@ -52,13 +52,20 @@ func (up *UnixProvider) connect(pid int) (*net.UnixConn, error) {
 		return nil, fmt.Errorf("error getting current working directory for process %d: %v", pid, err)
 	}
 
-	attachFile := filepath.Join(cwd, fmt.Sprintf(".attach_pid%d", pid))
-	if err := os.WriteFile(attachFile, nil, 0660); err != nil {
-		return nil, fmt.Errorf("error creating file %s: %w", attachFile, err)
+	var (
+		attachFile = fmt.Sprintf(".attach_pid%d", pid)
+		attachPath = filepath.Join(cwd, attachFile)
+	)
+	if err := os.WriteFile(attachPath, nil, 0660); err != nil {
+		// no permissions/read-only fs? try the temporary directory
+		attachPath = filepath.Join(os.TempDir(), attachFile)
+		if err := os.WriteFile(attachPath, nil, 0660); err != nil {
+			return nil, fmt.Errorf("error creating attach file %s: %w", attachFile, err)
+		}
 	}
 
 	defer func() {
-		_ = os.Remove(attachFile)
+		_ = os.Remove(attachPath)
 	}()
 
 	err = syscall.Kill(pid, syscall.SIGQUIT)
