@@ -2,9 +2,6 @@
 
 package attach
 
-/*
-#include "attach_windows.c"
-*/
 import "C"
 import (
 	"fmt"
