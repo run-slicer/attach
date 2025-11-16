@@ -6,8 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <windows.h>
 #include <sddl.h>
+#include "attach_windows.h"
 
 typedef HMODULE (WINAPI *GetModuleHandle_t)(LPCTSTR lpModuleName);
 typedef FARPROC (WINAPI *GetProcAddress_t)(HMODULE hModule, LPCSTR lpProcName);
@@ -96,12 +96,6 @@ static LPVOID allocate_data(HANDLE hProcess, char* pipeName, int argc, char** ar
     }
     return remoteData;
 }
-
-typedef struct {
-    int success;
-    DWORD error_code;
-    char error_msg[256];
-} attach_result_t;
 
 // If the process is owned by another user, request SeDebugPrivilege to open it.
 // Debug privileges are typically granted to Administrators.
@@ -212,12 +206,6 @@ static int inject_thread(int pid, char* pipeName, int argc, char** argv, attach_
 
     return success;
 }
-
-typedef struct {
-    char* data;
-    int capacity;
-    int length;
-} response_buffer_t;
 
 // JVM response is read from the pipe and stored in buffer
 static int read_response(HANDLE hPipe, response_buffer_t* buffer, attach_result_t* result) {
