@@ -5,6 +5,7 @@ package attach
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -39,7 +40,7 @@ func (up *UnixProvider) AttachID(id string) (VM, error) {
 		return nil, fmt.Errorf("error attaching to process %d: %v", pid, err)
 	}
 
-	return &stdVM{conn}, nil
+	return &hotSpotVM{c: &stdConn{conn}}, nil
 }
 
 func (up *UnixProvider) attachFilePath(pid int) (string, error) {
@@ -98,4 +99,22 @@ func (up *UnixProvider) connect(pid int) (*net.UnixConn, error) {
 		return conn, nil
 	}
 	return nil, err
+}
+
+type stdConn struct {
+	net.Conn
+}
+
+func (sc *stdConn) send(cmd string, args ...string) ([]byte, error) {
+	data := request(cmd, args...)
+	if _, err := sc.Conn.Write(data); err != nil {
+		return nil, fmt.Errorf("error writing to socket: %v", err)
+	}
+
+	resp, err := io.ReadAll(sc.Conn)
+	if err != nil {
+		return nil, fmt.Errorf("error reading from socket: %v", err)
+	}
+
+	return response(resp)
 }

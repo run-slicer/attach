@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -119,8 +118,14 @@ func (sp stdProvider) List() ([]*VMDescriptor, error) {
 	return descs, nil
 }
 
-type stdVM struct {
-	conn net.Conn
+type conn interface {
+	io.Closer
+
+	send(cmd string, args ...string) ([]byte, error)
+}
+
+type hotSpotVM struct {
+	c conn
 }
 
 const (
@@ -168,7 +173,7 @@ func (eal *ErrAgentLoad) Unwrap() error {
 	return eal.ErrLoad
 }
 
-func (vm *stdVM) Load(agent string, options string) error {
+func (vm *hotSpotVM) Load(agent string, options string) error {
 	absAgent, err := filepath.Abs(agent)
 	if err != nil {
 		return fmt.Errorf("failed to get absolute path for agent %s: %v", agent, err)
@@ -193,13 +198,13 @@ func (vm *stdVM) Load(agent string, options string) error {
 
 const retCodePrefix = "return code: "
 
-func (vm *stdVM) LoadLibrary(path string, absolute bool, options string) error {
+func (vm *hotSpotVM) LoadLibrary(path string, absolute bool, options string) error {
 	args := []string{path, strconv.FormatBool(absolute)}
 	if options != "" {
 		args = append(args, options)
 	}
 
-	resp, err := vm.send("load", args...)
+	resp, err := vm.c.send("load", args...)
 	if err != nil {
 		return err
 	}
@@ -220,8 +225,8 @@ func (vm *stdVM) LoadLibrary(path string, absolute bool, options string) error {
 	return nil
 }
 
-func (vm *stdVM) Properties() (map[string]string, error) {
-	resp, err := vm.send("properties")
+func (vm *hotSpotVM) Properties() (map[string]string, error) {
+	resp, err := vm.c.send("properties")
 	if err != nil {
 		return nil, err
 	}
@@ -229,8 +234,8 @@ func (vm *stdVM) Properties() (map[string]string, error) {
 	return properties(resp), nil
 }
 
-func (vm *stdVM) ThreadDump() (string, error) {
-	resp, err := vm.send("threaddump")
+func (vm *hotSpotVM) ThreadDump() (string, error) {
+	resp, err := vm.c.send("threaddump")
 	if err != nil {
 		return "", err
 	}
@@ -238,20 +243,6 @@ func (vm *stdVM) ThreadDump() (string, error) {
 	return string(resp), nil
 }
 
-func (vm *stdVM) send(cmd string, args ...string) ([]byte, error) {
-	data := request(cmd, args...)
-	if _, err := vm.conn.Write(data); err != nil {
-		return nil, fmt.Errorf("error writing to socket: %v", err)
-	}
-
-	resp, err := io.ReadAll(vm.conn)
-	if err != nil {
-		return nil, fmt.Errorf("error reading from socket: %v", err)
-	}
-
-	return response(resp)
-}
-
-func (vm *stdVM) Close() error {
-	return vm.conn.Close()
+func (vm *hotSpotVM) Close() error {
+	return vm.c.Close()
 }
