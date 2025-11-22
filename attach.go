@@ -64,27 +64,35 @@ type Provider interface {
 type stdProvider struct {
 }
 
-// listPids returns a list of process IDs found in the hsperfdata directories.
+// listPids returns a list of process IDs found in the hsperfdata and .com_ibm_tools_attach directories.
 // The PIDs may or may not exist or may not be from Java processes.
 func (sp stdProvider) listPids() ([]int, error) {
-	entries, err := os.ReadDir(os.TempDir())
-	if err != nil {
-		return nil, err
+	pids := map[int]struct{}{}
+
+	hsEntries, err := os.ReadDir(os.TempDir())
+	if err == nil {
+		for _, entry := range hsEntries {
+			if !strings.HasPrefix(entry.Name(), "hsperfdata_") || !entry.IsDir() {
+				continue
+			}
+
+			subEntries, err := os.ReadDir(filepath.Join(os.TempDir(), entry.Name()))
+			if err != nil {
+				continue
+			}
+
+			for _, subEntry := range subEntries {
+				if pid, err := strconv.Atoi(subEntry.Name()); err == nil {
+					pids[pid] = struct{}{}
+				}
+			}
+		}
 	}
 
-	pids := map[int]struct{}{}
-	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), "hsperfdata_") || !entry.IsDir() {
-			continue
-		}
-
-		subEntries, err := os.ReadDir(filepath.Join(os.TempDir(), entry.Name()))
-		if err != nil {
-			continue
-		}
-
-		for _, subEntry := range subEntries {
-			if pid, err := strconv.Atoi(subEntry.Name()); err == nil {
+	oj9Entries, err := os.ReadDir(filepath.Join(os.TempDir(), ".com_ibm_tools_attach"))
+	if err == nil {
+		for _, entry := range oj9Entries {
+			if pid, err := strconv.Atoi(entry.Name()); err == nil {
 				pids[pid] = struct{}{}
 			}
 		}
@@ -124,17 +132,6 @@ type conn interface {
 	send(cmd string, args ...string) ([]byte, error)
 }
 
-type hotSpotVM struct {
-	c conn
-}
-
-const (
-	jniENoMem            = -4
-	attachErrorBadJar    = 100
-	attachErrorNotOnCP   = 101
-	attachErrorStartFail = 102
-)
-
 type ErrLoad struct {
 	Code    int
 	Message string
@@ -151,6 +148,13 @@ func (el *ErrLoad) Error() string {
 type ErrAgentLoad struct {
 	*ErrLoad
 }
+
+const (
+	jniENoMem            = -4
+	attachErrorBadJar    = 100
+	attachErrorNotOnCP   = 101
+	attachErrorStartFail = 102
+)
 
 func (eal *ErrAgentLoad) Error() string {
 	if eal.Message == "" {
@@ -171,78 +175,4 @@ func (eal *ErrAgentLoad) Error() string {
 
 func (eal *ErrAgentLoad) Unwrap() error {
 	return eal.ErrLoad
-}
-
-func (vm *hotSpotVM) Load(agent string, options string) error {
-	absAgent, err := filepath.Abs(agent)
-	if err != nil {
-		return fmt.Errorf("failed to get absolute path for agent %s: %v", agent, err)
-	}
-
-	args := absAgent
-	if options != "" {
-		args = args + "=" + options
-	}
-
-	err = vm.LoadLibrary("instrument", false, args)
-	if err != nil {
-		var el *ErrLoad
-		if errors.As(err, &el) {
-			return &ErrAgentLoad{el}
-		}
-		return err
-	}
-
-	return nil
-}
-
-const retCodePrefix = "return code: "
-
-func (vm *hotSpotVM) LoadLibrary(path string, absolute bool, options string) error {
-	args := []string{path, strconv.FormatBool(absolute)}
-	if options != "" {
-		args = append(args, options)
-	}
-
-	resp, err := vm.c.send("load", args...)
-	if err != nil {
-		return err
-	}
-
-	str := strings.TrimSpace(string(resp))
-	if strings.HasPrefix(str, retCodePrefix) {
-		code, err := strconv.Atoi(strings.TrimPrefix(str, retCodePrefix))
-		if err != nil {
-			return &ErrParse{str}
-		}
-		if code != 0 {
-			return &ErrLoad{Code: code}
-		}
-	} else {
-		return &ErrLoad{Message: str}
-	}
-
-	return nil
-}
-
-func (vm *hotSpotVM) Properties() (map[string]string, error) {
-	resp, err := vm.c.send("properties")
-	if err != nil {
-		return nil, err
-	}
-
-	return properties(resp), nil
-}
-
-func (vm *hotSpotVM) ThreadDump() (string, error) {
-	resp, err := vm.c.send("threaddump")
-	if err != nil {
-		return "", err
-	}
-
-	return string(resp), nil
-}
-
-func (vm *hotSpotVM) Close() error {
-	return vm.c.Close()
 }
