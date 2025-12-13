@@ -1,4 +1,4 @@
-module github.com/run-slicer/attach
+module github.com/katana-project/attach
 
 go 1.24.6
 
